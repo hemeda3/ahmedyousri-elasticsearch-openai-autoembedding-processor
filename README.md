@@ -151,6 +151,13 @@ POST /my_index/_hybrid_search
 - **Model compatibility**: Must manually ensure mapping dims match model dims
 - **API key**: Required for all embedding operations
 
+### 🚧 Planned Features (TODO)
+- **Auto Pipeline Embedding Async**: Automatic pipeline creation and async processing
+- **OpenAI Batch API**: Batch processing for cost-effective bulk embeddings
+- **Gemini Batch + Models**: Google Gemini API integration with batch processing
+- **Job Tracking Progress Pipeline**: Real-time progress tracking for embedding jobs
+- **Kibana Plugin**: UI for managing embeddings, pipelines, and monitoring
+
 ## Configuration Options
 
 ### AI Embed Processor Parameters
