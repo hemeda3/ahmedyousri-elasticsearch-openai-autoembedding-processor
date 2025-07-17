@@ -83,12 +83,45 @@ curl -X POST "localhost:9200/_bulk" -H 'Content-Type: application/json' -d'
 
 ## 6. Search by Vector
 
+First, get an embedding for your search query:
+
+```bash
+curl -X POST "https://api.openai.com/v1/embeddings" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "input": "search for similar cases",
+    "model": "text-embedding-3-small"
+  }'
+```
+
+Then use the returned 1536-dimensional vector for search:
+
 ```bash
 curl -X POST "localhost:9200/cases/_search" -H 'Content-Type: application/json' -d'
 {
   "knn": {
     "field": "full_case_text_vector",
-    "query_vector": [0.1, 0.2, 0.3],
+    "query_vector": [0.1, 0.2, 0.3, ...1536 dimensions...],
     "k": 10
   }
 }'
+```
+
+## 7. Verify Document Has Embeddings
+
+```bash
+curl -X GET "localhost:9200/cases/_search" -H 'Content-Type: application/json' -d'
+{
+  "query": {"match_all": {}},
+  "size": 1
+}'
+```
+
+You should see fields like:
+- `case_identifier_vector`: Array of 1536 floats
+- `full_case_text_vector`: Array of 1536 floats
+
+## ✅ Success!
+
+Your plugin is working correctly! The document was indexed with proper 1536-dimensional embeddings from OpenAI.

@@ -18,6 +18,13 @@
             <outputDirectory>/</outputDirectory>
         </fileSet>
         <fileSet>
+            <directory>${project.basedir}/src/main/resources</directory>
+            <includes>
+                <include>plugin-security.policy</include>
+            </includes>
+            <outputDirectory>/</outputDirectory>
+        </fileSet>
+        <fileSet>
             <directory>${project.build.directory}</directory>
             <includes>
                 <include>${project.artifactId}-${project.version}.jar</include>

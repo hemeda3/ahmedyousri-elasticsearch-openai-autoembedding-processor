@@ -1,0 +1,18 @@
+grant {
+    // Network permissions for OpenAI API calls
+    permission java.net.SocketPermission "api.openai.com:443", "connect,resolve";
+    permission java.net.SocketPermission "*.openai.com:443", "connect,resolve";
+    
+    // Runtime permissions needed for reflection and JSON processing
+    permission java.lang.RuntimePermission "accessDeclaredMembers";
+    permission java.lang.RuntimePermission "setContextClassLoader";
+    
+    // Property permissions for reading system properties
+    permission java.util.PropertyPermission "*", "read";
+    
+    // Reflect permission for JSON serialization/deserialization
+    permission java.lang.reflect.ReflectPermission "suppressAccessChecks";
+    
+    // Special permission for privileged actions
+    permission java.security.SecurityPermission "createAccessControlContext";
+};
