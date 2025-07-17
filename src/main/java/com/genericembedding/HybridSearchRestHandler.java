@@ -172,42 +172,59 @@ public class HybridSearchRestHandler implements RestHandler {
             if (regularRequest.has("from")) {
                 sourceBuilder.from(regularRequest.get("from").asInt());
             }
-            if (regularRequest.has("_source")) {
-                JsonNode sourceNode = regularRequest.get("_source");
-                if (sourceNode.isTextual()) {
-                    sourceBuilder.fetchSource(sourceNode.asText(), null);
-                } else if (sourceNode.isArray()) {
-                    String[] includes = new String[sourceNode.size()];
-                    for (int i = 0; i < sourceNode.size(); i++) {
-                        includes[i] = sourceNode.get(i).asText();
-                    }
-                    sourceBuilder.fetchSource(includes, null);
-                } else if (sourceNode.isObject()) {
-                    // Handle _source object with includes/excludes
-                    JsonNode includesNode = sourceNode.get("includes");
-                    JsonNode excludesNode = sourceNode.get("excludes");
-                    
-                    String[] includes = null;
-                    String[] excludes = null;
-                    
-                    if (includesNode != null && includesNode.isArray()) {
-                        includes = new String[includesNode.size()];
-                        for (int i = 0; i < includesNode.size(); i++) {
-                            includes[i] = includesNode.get(i).asText();
+            // Handle _source field filtering with proper validation
+            try {
+                if (regularRequest.has("_source")) {
+                    JsonNode sourceNode = regularRequest.get("_source");
+                    if (sourceNode.isTextual()) {
+                        sourceBuilder.fetchSource(sourceNode.asText(), null);
+                    } else if (sourceNode.isArray()) {
+                        String[] includes = new String[sourceNode.size()];
+                        for (int i = 0; i < sourceNode.size(); i++) {
+                            includes[i] = sourceNode.get(i).asText();
                         }
-                    }
-                    
-                    if (excludesNode != null && excludesNode.isArray()) {
-                        excludes = new String[excludesNode.size()];
-                        for (int i = 0; i < excludesNode.size(); i++) {
-                            excludes[i] = excludesNode.get(i).asText();
+                        sourceBuilder.fetchSource(includes, null);
+                    } else if (sourceNode.isObject()) {
+                        // Handle _source object with includes/excludes
+                        JsonNode includesNode = sourceNode.get("includes");
+                        JsonNode excludesNode = sourceNode.get("excludes");
+                        
+                        String[] includes = null;
+                        String[] excludes = null;
+                        
+                        if (includesNode != null) {
+                            if (includesNode.isArray()) {
+                                includes = new String[includesNode.size()];
+                                for (int i = 0; i < includesNode.size(); i++) {
+                                    includes[i] = includesNode.get(i).asText();
+                                }
+                            } else if (includesNode.isTextual()) {
+                                includes = new String[]{includesNode.asText()};
+                            }
                         }
+                        
+                        if (excludesNode != null) {
+                            if (excludesNode.isArray()) {
+                                excludes = new String[excludesNode.size()];
+                                for (int i = 0; i < excludesNode.size(); i++) {
+                                    excludes[i] = excludesNode.get(i).asText();
+                                }
+                            } else if (excludesNode.isTextual()) {
+                                excludes = new String[]{excludesNode.asText()};
+                            }
+                        }
+                        
+                        sourceBuilder.fetchSource(includes, excludes);
+                    } else if (sourceNode.isBoolean() && !sourceNode.asBoolean()) {
+                        // _source: false means no source
+                        sourceBuilder.fetchSource(false);
                     }
-                    
-                    sourceBuilder.fetchSource(includes, excludes);
+                } else {
+                    // Exclude vector fields by default to avoid large payloads
+                    sourceBuilder.fetchSource(null, new String[]{"*_vector", "embedding_usage", "embedding_error"});
                 }
-            } else {
-                // Exclude vector fields by default to avoid large payloads
+            } catch (Exception e) {
+                logger.warn("Invalid _source configuration, using defaults: {}", e.getMessage());
                 sourceBuilder.fetchSource(null, new String[]{"*_vector", "embedding_usage", "embedding_error"});
             }
             
@@ -253,8 +270,8 @@ public class HybridSearchRestHandler implements RestHandler {
             // Build the inner query (match_all)
             queryJson.set("match_all", MAPPER.createObjectNode());
             
-            // Build the script
-            scriptJson.put("source", String.format("cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, boost));
+            // Build the script with null check for missing vectors
+            scriptJson.put("source", String.format("doc['%s'].size() == 0 ? 0 : cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, vectorField, boost));
             
             // Add the query vector as array
             com.fasterxml.jackson.databind.node.ArrayNode vectorArray = MAPPER.createArrayNode();
@@ -276,8 +293,60 @@ public class HybridSearchRestHandler implements RestHandler {
             sourceBuilder.query(org.elasticsearch.index.query.QueryBuilders.wrapperQuery(scriptScoreQueryString));
             sourceBuilder.size(topK);
             
-            // Exclude vector fields from response to avoid large payloads
-            sourceBuilder.fetchSource(null, new String[]{vectorField, "embedding_usage", "embedding_error"});
+            // Apply same _source filtering as regular search
+            try {
+                JsonNode requestJson = MAPPER.readTree(request.content().utf8ToString());
+                if (requestJson.has("_source")) {
+                    JsonNode sourceNode = requestJson.get("_source");
+                    if (sourceNode.isTextual()) {
+                        sourceBuilder.fetchSource(sourceNode.asText(), null);
+                    } else if (sourceNode.isArray()) {
+                        String[] includes = new String[sourceNode.size()];
+                        for (int i = 0; i < sourceNode.size(); i++) {
+                            includes[i] = sourceNode.get(i).asText();
+                        }
+                        sourceBuilder.fetchSource(includes, null);
+                    } else if (sourceNode.isObject()) {
+                        JsonNode includesNode = sourceNode.get("includes");
+                        JsonNode excludesNode = sourceNode.get("excludes");
+                        
+                        String[] includes = null;
+                        String[] excludes = null;
+                        
+                        if (includesNode != null) {
+                            if (includesNode.isArray()) {
+                                includes = new String[includesNode.size()];
+                                for (int i = 0; i < includesNode.size(); i++) {
+                                    includes[i] = includesNode.get(i).asText();
+                                }
+                            } else if (includesNode.isTextual()) {
+                                includes = new String[]{includesNode.asText()};
+                            }
+                        }
+                        
+                        if (excludesNode != null) {
+                            if (excludesNode.isArray()) {
+                                excludes = new String[excludesNode.size()];
+                                for (int i = 0; i < excludesNode.size(); i++) {
+                                    excludes[i] = excludesNode.get(i).asText();
+                                }
+                            } else if (excludesNode.isTextual()) {
+                                excludes = new String[]{excludesNode.asText()};
+                            }
+                        }
+                        
+                        sourceBuilder.fetchSource(includes, excludes);
+                    } else if (sourceNode.isBoolean() && !sourceNode.asBoolean()) {
+                        sourceBuilder.fetchSource(false);
+                    }
+                } else {
+                    // Exclude vector fields by default
+                    sourceBuilder.fetchSource(null, new String[]{vectorField, "embedding_usage", "embedding_error"});
+                }
+            } catch (Exception e) {
+                logger.warn("Invalid _source configuration for semantic search, using defaults: {}", e.getMessage());
+                sourceBuilder.fetchSource(null, new String[]{vectorField, "embedding_usage", "embedding_error"});
+            }
             
             searchRequest.source(sourceBuilder);
             
@@ -292,7 +361,14 @@ public class HybridSearchRestHandler implements RestHandler {
                 @Override
                 public void onFailure(Exception e) {
                     logger.error("Semantic search failed", e);
-                    future.completeExceptionally(e);
+                    
+                    // Check for specific vector field mapping error and wrap with better message
+                    if (e.getMessage() != null && e.getMessage().contains("No field found for") && e.getMessage().contains("_vector")) {
+                        Exception wrappedException = new Exception("Vector field not found in index mapping. Please ensure the index has vector fields created by the embedding pipeline. Original error: " + e.getMessage(), e);
+                        future.completeExceptionally(wrappedException);
+                    } else {
+                        future.completeExceptionally(e);
+                    }
                 }
             });
             
@@ -312,27 +388,33 @@ public class HybridSearchRestHandler implements RestHandler {
         
         // Add regular search results first (higher priority)
         for (SearchHit hit : regularResponse.getHits().getHits()) {
-            hit.getSourceAsMap().put("search_type", "regular");
-            hit.getSourceAsMap().put("regular_score", hit.getScore());
-            combinedHits.put(hit.getId(), hit);
+            if (hit != null && hit.getId() != null && hit.getSourceAsMap() != null) {
+                hit.getSourceAsMap().put("search_type", "regular");
+                hit.getSourceAsMap().put("regular_score", hit.getScore());
+                combinedHits.put(hit.getId(), hit);
+            }
         }
         
         // Add semantic search results, merging if already exists
         for (SearchHit hit : semanticResponse.getHits().getHits()) {
-            String id = hit.getId();
-            if (combinedHits.containsKey(id)) {
-                // Merge scores for documents found in both searches
-                SearchHit existingHit = combinedHits.get(id);
-                existingHit.getSourceAsMap().put("search_type", "hybrid");
-                existingHit.getSourceAsMap().put("semantic_score", hit.getScore());
-                existingHit.getSourceAsMap().put("combined_score", existingHit.getScore() + hit.getScore());
-                // Update the hit score to combined score
-                existingHit.score(existingHit.getScore() + hit.getScore());
-            } else {
-                // Add semantic-only results
-                hit.getSourceAsMap().put("search_type", "semantic");
-                hit.getSourceAsMap().put("semantic_score", hit.getScore());
-                combinedHits.put(id, hit);
+            if (hit != null && hit.getId() != null && hit.getSourceAsMap() != null) {
+                String id = hit.getId();
+                if (combinedHits.containsKey(id)) {
+                    // Merge scores for documents found in both searches
+                    SearchHit existingHit = combinedHits.get(id);
+                    if (existingHit != null && existingHit.getSourceAsMap() != null) {
+                        existingHit.getSourceAsMap().put("search_type", "hybrid");
+                        existingHit.getSourceAsMap().put("semantic_score", hit.getScore());
+                        existingHit.getSourceAsMap().put("combined_score", existingHit.getScore() + hit.getScore());
+                        // Update the hit score to combined score
+                        existingHit.score(existingHit.getScore() + hit.getScore());
+                    }
+                } else {
+                    // Add semantic-only results
+                    hit.getSourceAsMap().put("search_type", "semantic");
+                    hit.getSourceAsMap().put("semantic_score", hit.getScore());
+                    combinedHits.put(id, hit);
+                }
             }
         }
         
@@ -369,6 +451,22 @@ public class HybridSearchRestHandler implements RestHandler {
             builder.field("_index", hit.getIndex());
             builder.field("_id", hit.getId());
             builder.field("_score", hit.getScore());
+            
+            // Add search type metadata at hit level
+            String searchType = (String) hit.getSourceAsMap().get("search_type");
+            builder.field("_search_type", searchType != null ? searchType : "unknown");
+            
+            // Add individual scores if available
+            if (hit.getSourceAsMap().containsKey("regular_score")) {
+                builder.field("_regular_score", hit.getSourceAsMap().get("regular_score"));
+            }
+            if (hit.getSourceAsMap().containsKey("semantic_score")) {
+                builder.field("_semantic_score", hit.getSourceAsMap().get("semantic_score"));
+            }
+            if (hit.getSourceAsMap().containsKey("combined_score")) {
+                builder.field("_combined_score", hit.getSourceAsMap().get("combined_score"));
+            }
+            
             builder.field("_source", hit.getSourceAsMap());
             builder.endObject();
         }
@@ -466,10 +564,23 @@ public class HybridSearchRestHandler implements RestHandler {
         headers.put("Authorization", "Bearer " + apiKey);
         config.put(PluginConstants.CONFIG_HEADERS, headers);
         
-        EmbeddingProvider provider = ProviderFactory.create(config);
-        ProviderRequest providerRequest = new ProviderRequest(queryText);
-        ProviderResponse response = provider.embed(Collections.singletonList(providerRequest));
-        
-        return response.getVectors().get(0);
+        // Use doPrivileged to execute network operations with elevated permissions
+        try {
+            return java.security.AccessController.doPrivileged((java.security.PrivilegedExceptionAction<List<Float>>) () -> {
+                logger.info("Executing embedding generation with elevated privileges");
+                EmbeddingProvider provider = ProviderFactory.create(config);
+                ProviderRequest providerRequest = new ProviderRequest(queryText);
+                ProviderResponse response = provider.embed(Collections.singletonList(providerRequest));
+                return response.getVectors().get(0);
+            });
+        } catch (java.security.PrivilegedActionException e) {
+            Throwable cause = e.getCause();
+            logger.error("Privileged action failed: {}", cause.getMessage());
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            } else {
+                throw new Exception("Unexpected exception in privileged action", cause);
+            }
+        }
     }
 }

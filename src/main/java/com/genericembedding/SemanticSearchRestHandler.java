@@ -132,8 +132,8 @@ public class SemanticSearchRestHandler implements RestHandler {
             // Build the inner query (match_all)
             queryJson.set("match_all", MAPPER.createObjectNode());
             
-            // Build the script
-            scriptJson.put("source", String.format("cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, boost));
+            // Build the script with null check for missing vectors
+            scriptJson.put("source", String.format("doc['%s'].size() == 0 ? 0 : cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, vectorField, boost));
             
             // Add the query vector as array
             com.fasterxml.jackson.databind.node.ArrayNode vectorArray = MAPPER.createArrayNode();
@@ -162,22 +162,60 @@ public class SemanticSearchRestHandler implements RestHandler {
             if (newRequest.has("from")) {
                 sourceBuilder.from(newRequest.get("from").asInt());
             }
-            if (newRequest.has("_source")) {
-                // Handle _source field if present
-                JsonNode sourceNode = newRequest.get("_source");
-                if (sourceNode.isTextual()) {
-                    sourceBuilder.fetchSource(sourceNode.asText(), null);
-                } else if (sourceNode.isArray()) {
-                    String[] includes = new String[sourceNode.size()];
-                    for (int i = 0; i < sourceNode.size(); i++) {
-                        includes[i] = sourceNode.get(i).asText();
-                    }
-                    sourceBuilder.fetchSource(includes, null);
-                }
-            }
             
-            // Exclude vector fields by default to avoid large payloads
-            if (!newRequest.has("_source")) {
+            // Enhanced _source handling with proper validation
+            try {
+                if (requestJson.has("_source")) {
+                    JsonNode sourceNode = requestJson.get("_source");
+                    if (sourceNode.isTextual()) {
+                        sourceBuilder.fetchSource(sourceNode.asText(), null);
+                    } else if (sourceNode.isArray()) {
+                        String[] includes = new String[sourceNode.size()];
+                        for (int i = 0; i < sourceNode.size(); i++) {
+                            includes[i] = sourceNode.get(i).asText();
+                        }
+                        sourceBuilder.fetchSource(includes, null);
+                    } else if (sourceNode.isObject()) {
+                        // Handle _source object with includes/excludes
+                        JsonNode includesNode = sourceNode.get("includes");
+                        JsonNode excludesNode = sourceNode.get("excludes");
+                        
+                        String[] includes = null;
+                        String[] excludes = null;
+                        
+                        if (includesNode != null) {
+                            if (includesNode.isArray()) {
+                                includes = new String[includesNode.size()];
+                                for (int i = 0; i < includesNode.size(); i++) {
+                                    includes[i] = includesNode.get(i).asText();
+                                }
+                            } else if (includesNode.isTextual()) {
+                                includes = new String[]{includesNode.asText()};
+                            }
+                        }
+                        
+                        if (excludesNode != null) {
+                            if (excludesNode.isArray()) {
+                                excludes = new String[excludesNode.size()];
+                                for (int i = 0; i < excludesNode.size(); i++) {
+                                    excludes[i] = excludesNode.get(i).asText();
+                                }
+                            } else if (excludesNode.isTextual()) {
+                                excludes = new String[]{excludesNode.asText()};
+                            }
+                        }
+                        
+                        sourceBuilder.fetchSource(includes, excludes);
+                    } else if (sourceNode.isBoolean() && !sourceNode.asBoolean()) {
+                        // _source: false means no source
+                        sourceBuilder.fetchSource(false);
+                    }
+                } else {
+                    // Exclude vector fields by default to avoid large payloads
+                    sourceBuilder.fetchSource(null, new String[]{"*_vector", "embedding_usage", "embedding_error"});
+                }
+            } catch (Exception e) {
+                logger.warn("Invalid _source configuration, using defaults: {}", e.getMessage());
                 sourceBuilder.fetchSource(null, new String[]{"*_vector", "embedding_usage", "embedding_error"});
             }
             
@@ -209,7 +247,14 @@ public class SemanticSearchRestHandler implements RestHandler {
                 public void onFailure(Exception e) {
                     logger.error("Search execution failed", e);
                     try {
-                        sendErrorResponse(channel, "Search execution failed: " + e.getMessage(), RestStatus.INTERNAL_SERVER_ERROR);
+                        String errorMessage = "Search execution failed: " + e.getMessage();
+                        
+                        // Check for specific vector field mapping error
+                        if (e.getMessage() != null && e.getMessage().contains("No field found for") && e.getMessage().contains("_vector")) {
+                            errorMessage = "Vector field not found in index mapping. Please ensure the index has vector fields created by the embedding pipeline. " + e.getMessage();
+                        }
+                        
+                        sendErrorResponse(channel, errorMessage, RestStatus.BAD_REQUEST);
                     } catch (IOException ioException) {
                         logger.error("Failed to send error response", ioException);
                     }
@@ -303,11 +348,24 @@ public class SemanticSearchRestHandler implements RestHandler {
         headers.put("Authorization", "Bearer " + apiKey);
         config.put(PluginConstants.CONFIG_HEADERS, headers);
         
-        EmbeddingProvider provider = ProviderFactory.create(config);
-        ProviderRequest providerRequest = new ProviderRequest(queryText);
-        ProviderResponse response = provider.embed(Collections.singletonList(providerRequest));
-        
-        return response.getVectors().get(0);
+        // Use doPrivileged to execute network operations with elevated permissions
+        try {
+            return java.security.AccessController.doPrivileged((java.security.PrivilegedExceptionAction<List<Float>>) () -> {
+                logger.info("Executing embedding generation with elevated privileges");
+                EmbeddingProvider provider = ProviderFactory.create(config);
+                ProviderRequest providerRequest = new ProviderRequest(queryText);
+                ProviderResponse response = provider.embed(Collections.singletonList(providerRequest));
+                return response.getVectors().get(0);
+            });
+        } catch (java.security.PrivilegedActionException e) {
+            Throwable cause = e.getCause();
+            logger.error("Privileged action failed: {}", cause.getMessage());
+            if (cause instanceof Exception) {
+                throw (Exception) cause;
+            } else {
+                throw new Exception("Unexpected exception in privileged action", cause);
+            }
+        }
     }
     
     private ObjectNode createScriptScoreQuery(List<Float> queryVector, String vectorField, double boost) {
@@ -319,7 +377,7 @@ public class SemanticSearchRestHandler implements RestHandler {
         
         // Build script_score query
         query.set("match_all", MAPPER.createObjectNode());
-        script.put("source", String.format("cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, boost));
+        script.put("source", String.format("doc['%s'].size() == 0 ? 0 : cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, vectorField, boost));
         
         // Manually create the array node to avoid Jackson serialization issues
         com.fasterxml.jackson.databind.node.ArrayNode vectorArray = MAPPER.createArrayNode();
