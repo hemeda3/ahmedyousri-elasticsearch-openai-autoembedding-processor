@@ -34,6 +34,11 @@ PUT /my_index
 }
 ```
 
+**Note**: Vector dimensions (1536) are fixed based on the OpenAI model. Different models require different dimensions:
+- `text-embedding-3-small`: 1536 dimensions
+- `text-embedding-3-large`: 3072 dimensions  
+- `text-embedding-ada-002`: 1536 dimensions
+
 ### 2. Create Embedding Pipeline
 
 ```bash
@@ -128,6 +133,24 @@ POST /my_index/_hybrid_search
 }
 ```
 
+## Implementation Status
+
+### ✅ Fully Implemented Features
+- **Auto-embedding processor** with all configuration options
+- **Semantic search handler** (`/_semantic_search`)
+- **Hybrid search handler** (`/_hybrid_search`)
+- **All processor parameters** are configurable
+- **Model selection** is configurable (but dims must match)
+- **Rate limiting and backoff** strategies
+- **Custom API providers** via generic provider
+- **Source field filtering** with includes/excludes
+- **Error handling** with user-friendly messages
+
+### ⚠️ Important Notes
+- **Vector dimensions**: Fixed per model, not configurable in mapping
+- **Model compatibility**: Must manually ensure mapping dims match model dims
+- **API key**: Required for all embedding operations
+
 ## Configuration Options
 
 ### AI Embed Processor Parameters
@@ -151,7 +174,11 @@ POST /my_index/_hybrid_search
 
 - **`model`** (string): Embedding model name
   - Default: `"text-embedding-3-small"`
-  - Options: `"text-embedding-3-small"`, `"text-embedding-3-large"`, `"text-embedding-ada-002"`
+  - **✅ CONFIGURABLE**: `"text-embedding-3-small"`, `"text-embedding-3-large"`, `"text-embedding-ada-002"`
+  - **⚠️ IMPORTANT**: Vector dimensions must match model:
+    - `text-embedding-3-small`: 1536 dims
+    - `text-embedding-3-large`: 3072 dims
+    - `text-embedding-ada-002`: 1536 dims
 
 #### Authentication
 - **`headers`** (object): HTTP headers for API requests
