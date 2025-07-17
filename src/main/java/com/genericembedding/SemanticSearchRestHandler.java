@@ -100,7 +100,7 @@ public class SemanticSearchRestHandler implements RestHandler {
             logger.info("Extracted query text: {}", queryText);
             
             // Generate embedding for the query
-            List<Float> queryVector = generateEmbedding(queryText);
+            List<Float> queryVector = generateEmbedding(queryText, request);
             logger.info("Generated query vector with {} dimensions", queryVector.size());
             
             // Create the script_score query
@@ -121,11 +121,42 @@ public class SemanticSearchRestHandler implements RestHandler {
             SearchRequest searchRequest = new SearchRequest(index);
             SearchSourceBuilder sourceBuilder = new SearchSourceBuilder();
             
-            String convertedQuery = MAPPER.writeValueAsString(newRequest);
-            logger.info("Converted query: {}", convertedQuery);
+            // Use script_score query builder directly instead of wrapper query
+            org.elasticsearch.index.query.functionscore.ScriptScoreQueryBuilder scriptScoreQuery = 
+                org.elasticsearch.index.query.QueryBuilders.scriptScore(
+                    org.elasticsearch.index.query.QueryBuilders.matchAllQuery(),
+                    new org.elasticsearch.script.Script(
+                        org.elasticsearch.script.ScriptType.INLINE,
+                        "painless",
+                        String.format("cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, boost),
+                        java.util.Map.of("query_vector", queryVector)
+                    )
+                );
             
-            // Build the search source using wrapper query to avoid parsing issues
-            sourceBuilder.query(org.elasticsearch.index.query.QueryBuilders.wrapperQuery(convertedQuery));
+            logger.info("Created script_score query with vector field: {} and boost: {}", vectorField, boost);
+            sourceBuilder.query(scriptScoreQuery);
+            
+            // Add other parameters from the original request
+            if (newRequest.has("size")) {
+                sourceBuilder.size(newRequest.get("size").asInt());
+            }
+            if (newRequest.has("from")) {
+                sourceBuilder.from(newRequest.get("from").asInt());
+            }
+            if (newRequest.has("_source")) {
+                // Handle _source field if present
+                JsonNode sourceNode = newRequest.get("_source");
+                if (sourceNode.isTextual()) {
+                    sourceBuilder.fetchSource(sourceNode.asText(), null);
+                } else if (sourceNode.isArray()) {
+                    String[] includes = new String[sourceNode.size()];
+                    for (int i = 0; i < sourceNode.size(); i++) {
+                        includes[i] = sourceNode.get(i).asText();
+                    }
+                    sourceBuilder.fetchSource(includes, null);
+                }
+            }
+            
             searchRequest.source(sourceBuilder);
             
             logger.info("Executing semantic search request");
@@ -219,17 +250,24 @@ public class SemanticSearchRestHandler implements RestHandler {
         return null;
     }
     
-    private List<Float> generateEmbedding(String queryText) throws Exception {
+    private List<Float> generateEmbedding(String queryText, RestRequest request) throws Exception {
         logger.info("Generating embedding for query text");
         
-        // Get API key from environment or settings
-        String apiKey = System.getenv("OPENAI_API_KEY");
-        if (apiKey == null) {
-            // Try to get from cluster settings
-            apiKey = settings.get("semantic_search.openai.api_key");
+        // Get API key from Authorization header first, then fallback to environment/settings
+        String apiKey = request.header("Authorization");
+        if (apiKey != null && apiKey.startsWith("Bearer ")) {
+            apiKey = apiKey.substring(7); // Remove "Bearer " prefix
+        } else {
+            // Fallback to environment variable
+            apiKey = System.getenv("OPENAI_API_KEY");
+            if (apiKey == null) {
+                // Try to get from cluster settings
+                apiKey = settings.get("semantic_search.openai.api_key");
+            }
         }
-        if (apiKey == null) {
-            throw new RuntimeException("OPENAI_API_KEY environment variable or semantic_search.openai.api_key setting not configured");
+        
+        if (apiKey == null || apiKey.trim().isEmpty()) {
+            throw new RuntimeException("API key not found. Please provide it via Authorization header (Bearer token), OPENAI_API_KEY environment variable, or semantic_search.openai.api_key setting");
         }
         
         Map<String, Object> config = new HashMap<>();
@@ -242,8 +280,8 @@ public class SemanticSearchRestHandler implements RestHandler {
         config.put(PluginConstants.CONFIG_HEADERS, headers);
         
         EmbeddingProvider provider = ProviderFactory.create(config);
-        ProviderRequest request = new ProviderRequest(queryText);
-        ProviderResponse response = provider.embed(Collections.singletonList(request));
+        ProviderRequest providerRequest = new ProviderRequest(queryText);
+        ProviderResponse response = provider.embed(Collections.singletonList(providerRequest));
         
         return response.getVectors().get(0);
     }
@@ -258,7 +296,13 @@ public class SemanticSearchRestHandler implements RestHandler {
         // Build script_score query
         query.set("match_all", MAPPER.createObjectNode());
         script.put("source", String.format("cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, boost));
-        params.set("query_vector", MAPPER.valueToTree(queryVector));
+        
+        // Manually create the array node to avoid Jackson serialization issues
+        com.fasterxml.jackson.databind.node.ArrayNode vectorArray = MAPPER.createArrayNode();
+        for (Float value : queryVector) {
+            vectorArray.add(value);
+        }
+        params.set("query_vector", vectorArray);
         script.set("params", params);
         
         scriptScore.set("query", query);
