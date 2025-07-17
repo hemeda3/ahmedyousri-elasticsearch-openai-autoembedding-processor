@@ -1,4 +1,3 @@
-````markdown
 # ahmedyousri-elasticsearch-openai-autoembedding-processor
 
 An Elasticsearch ingest processor plugin that automatically generates OpenAI-compatible dense vector embeddings for selected fields during document ingestion. Perfect for semantic search over legal, Arabic, or multilingual data.
@@ -176,6 +175,3 @@ Use this with source fields `["title", "content"]` and test search on `title_vec
 MIT (or Apache 2.0 — your choice)
 
 ---
-````
-
-Let me know if you want it saved to a `.md` file or zipped with your plugin.

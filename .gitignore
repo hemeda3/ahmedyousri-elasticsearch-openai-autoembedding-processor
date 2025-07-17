@@ -10,6 +10,24 @@
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
 
+# Maven output directory
+/target/
+
+# IntelliJ IDEA files
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# VS Code files
+.vscode/
+
+# Eclipse files
+.project
+.classpath
+.settings/
+.buildpath
+
 # Package Files #
 *.jar
 *.war
