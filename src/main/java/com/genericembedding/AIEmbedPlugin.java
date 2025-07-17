@@ -46,6 +46,9 @@ public class AIEmbedPlugin extends Plugin implements IngestPlugin, ActionPlugin 
         Supplier<DiscoveryNodes> nodesInCluster,
         Predicate<NodeFeature> clusterSupportsFeature
     ) {
-        return List.of(new SemanticSearchRestHandler(settings));
+        return List.of(
+            new SemanticSearchRestHandler(settings),
+            new HybridSearchRestHandler(settings)
+        );
     }
 }

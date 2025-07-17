@@ -176,6 +176,11 @@ public class SemanticSearchRestHandler implements RestHandler {
                 }
             }
             
+            // Exclude vector fields by default to avoid large payloads
+            if (!newRequest.has("_source")) {
+                sourceBuilder.fetchSource(null, new String[]{"*_vector", "embedding_usage", "embedding_error"});
+            }
+            
             searchRequest.source(sourceBuilder);
             
             logger.info("Executing semantic search request");
