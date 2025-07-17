@@ -1,177 +1,149 @@
-# ahmedyousri-elasticsearch-openai-autoembedding-processor
+# Elasticsearch OpenAI Auto-Embedding Plugin
 
-An Elasticsearch ingest processor plugin that automatically generates OpenAI-compatible dense vector embeddings for selected fields during document ingestion. Perfect for semantic search over legal, Arabic, or multilingual data.
+Elasticsearch plugin for automatic document embedding with OpenAI API and semantic/hybrid search capabilities.
 
----
+## Installation
 
-## ✨ Features
+```bash
+# Build plugin
+mvn clean package
 
-- 🔌 **Elasticsearch Ingest Processor**: Named `openai_embed`
-- 🧠 **Per-field embedding**: Auto-generates one embedding per field (e.g. `case_identifier`, `summary`)
-- 🧾 **Stores vectors in** `dense_vector` fields with names like `{field}_vector`
-- ⚙️ **Configurable**:
-  - `api_key`: OpenAI or compatible API key
-  - `api_url`: Defaults to `https://api.openai.com/v1/embeddings`
-  - `model`: e.g. `text-embedding-3-small`
-- ⚡ **No need for custom mapping logic** – plugin auto-names output fields
+# Install in Elasticsearch
+bin/elasticsearch-plugin install file:///path/to/target/elasticsearch-openai-autoembedding-processor-1.0.0.zip
 
----
+# Restart Elasticsearch
+```
 
-## 🛠 Example Ingest Pipeline
+## Quick Setup
 
-```json
-PUT _ingest/pipeline/auto_embed_pipeline
+### 1. Create Index with Vector Mapping
+
+```bash
+PUT /my_index
+{
+  "mappings": {
+    "properties": {
+      "text_field": {"type": "text"},
+      "text_field_vector": {"type": "dense_vector", "dims": 1536}
+    }
+  }
+}
+```
+
+### 2. Create Embedding Pipeline
+
+```bash
+PUT /_ingest/pipeline/embedding_pipeline
 {
   "processors": [
     {
-      "openai_embed": {
-        "source_fields": ["case_identifier", "full_case_text", "summary"],
-        "api_key": "{{OPENAI_API_KEY}}",
-        "model": "text-embedding-3-small"
+      "ai_embed": {
+        "source_fields": ["text_field"],
+        "headers": {
+          "Authorization": "Bearer YOUR_OPENAI_API_KEY"
+        }
       }
     }
   ]
 }
 ```
 
----
-
-## 📄 Example Document
-
-```json
-POST /legal_cases/_doc?pipeline=auto_embed_pipeline
-{
-  "case_identifier": "17-12-2018 - رقم الطعن 708",
-  "full_case_text": "تفاصيل الحكم الكامل...",
-  "summary": "جريمة قتل في ظروف مشددة"
-}
-```
-
-After processing, Elasticsearch will store:
-
-```json
-{
-  "case_identifier_vector": [...],
-  "full_case_text_vector": [...],
-  "summary_vector": [...]
-}
-```
-
----
-
-## 🔍 Vector Search Example
-
-```json
-POST /legal_cases/_search
-{
-  "query": {
-    "script_score": {
-      "query": { "match_all": {} },
-      "script": {
-        "source": "cosineSimilarity(params.query_vector, 'summary_vector') + 1.0",
-        "params": {
-          "query_vector": [0.123, 0.456, 0.789, ...]
-        }
-      }
-    }
-  }
-}
-```
-
----
-
-## 📐 Index Mapping Example
-
-```json
-PUT /legal_cases
-{
-  "mappings": {
-    "properties": {
-      "case_identifier": { "type": "text" },
-      "full_case_text": { "type": "text" },
-      "summary": { "type": "text" },
-      "case_identifier_vector": {
-        "type": "dense_vector",
-        "dims": 1536,
-        "index": true,
-        "similarity": "cosine"
-      },
-      "full_case_text_vector": {
-        "type": "dense_vector",
-        "dims": 1536,
-        "index": true,
-        "similarity": "cosine"
-      },
-      "summary_vector": {
-        "type": "dense_vector",
-        "dims": 1536,
-        "index": true,
-        "similarity": "cosine"
-      }
-    }
-  }
-}
-```
-
----
-
-## ⚙️ Build & Install
-
-1. Build the plugin with Maven:
+### 3. Index Documents
 
 ```bash
-mvn package
+POST /my_index/_doc?pipeline=embedding_pipeline
+{
+  "text_field": "Your document content here"
+}
 ```
 
-2. Install it into Elasticsearch:
+## Search Endpoints
 
+### Semantic Search
 ```bash
-elasticsearch-plugin install file:///path/to/ahmedyousri-elasticsearch-openai-autoembedding-processor.zip
-```
-
-3. Restart Elasticsearch:
-
-```bash
-systemctl restart elasticsearch
-# or
-docker restart elasticsearch-container
-```
-
----
-
-## 📋 Notes
-
-- `dense_vector` field dimensions must match the model (e.g. `1536` for `text-embedding-3-small`)
-- All vector output fields are named `{source_field}_vector` by default
-- Plugin supports OpenAI-compatible APIs (like Azure OpenAI or self-hosted models)
-
----
-
-## 🧪 Sample Test Data
-
-```json
-[
-  {
-    "title": "The Importance of Sleep",
-    "content": "Sleep improves memory, mood, and immune function."
+POST /my_index/_semantic_search
+{
+  "query": {"match": {"text_field": "search query"}},
+  "semantic_search": {
+    "enabled": true,
+    "field": "text_field_vector",
+    "boost": 2.0
   },
-  {
-    "title": "Baking Cookies",
-    "content": "Mix ingredients, bake at 350°F, enjoy delicious cookies."
-  },
-  {
-    "title": "Exploring the Solar System",
-    "content": "The solar system contains the sun and eight planets."
-  }
-]
+  "size": 10
+}
 ```
 
-Use this with source fields `["title", "content"]` and test search on `title_vector` or `content_vector`.
+### Hybrid Search
+```bash
+POST /my_index/_hybrid_search
+{
+  "query": {"match": {"text_field": "search query"}},
+  "semantic_search": {
+    "enabled": true,
+    "field": "text_field_vector",
+    "boost": 2.0,
+    "top_k": 20
+  },
+  "size": 10
+}
+```
 
----
+## Configuration
 
-## 📖 License
+### Processor Parameters
+- `source_fields`: Fields to embed (required)
+- `provider`: "openai" or "generic" (default: "generic")
+- `api_url`: API endpoint (default: OpenAI)
+- `model`: Embedding model (default: "text-embedding-3-small")
+- `headers`: HTTP headers including API key
 
-MIT (or Apache 2.0 — your choice)
+### Search Parameters
+- `field`: Vector field name
+- `boost`: Score multiplier
+- `top_k`: Results per search type (hybrid only)
 
----
+### Response Filtering
+```bash
+{
+  "_source": {
+    "excludes": ["*_vector", "embedding_usage"]
+  }
+}
+```
+
+## Response Format
+
+### Hybrid Search Response
+```json
+{
+  "hits": {
+    "hits": [
+      {
+        "_id": "doc1",
+        "_score": 3.2,
+        "_search_type": "hybrid",
+        "_regular_score": 1.5,
+        "_semantic_score": 1.7,
+        "_source": {...}
+      }
+    ]
+  },
+  "search_breakdown": {
+    "regular_hits": 20,
+    "semantic_hits": 20,
+    "hybrid_matches": 3
+  }
+}
+```
+
+### Search Types
+- `"hybrid"`: Found in both keyword and semantic search
+- `"regular"`: Found only in keyword search  
+- `"semantic"`: Found only in semantic search
+
+## Requirements
+
+- Elasticsearch 8.13+
+- OpenAI API key
+- Java 17+
+- Maven 3.6+
