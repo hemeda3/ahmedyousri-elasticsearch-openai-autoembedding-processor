@@ -121,20 +121,39 @@ public class SemanticSearchRestHandler implements RestHandler {
             SearchRequest searchRequest = new SearchRequest(index);
             SearchSourceBuilder sourceBuilder = new SearchSourceBuilder();
             
-            // Use script_score query builder directly instead of wrapper query
-            org.elasticsearch.index.query.functionscore.ScriptScoreQueryBuilder scriptScoreQuery = 
-                org.elasticsearch.index.query.QueryBuilders.scriptScore(
-                    org.elasticsearch.index.query.QueryBuilders.matchAllQuery(),
-                    new org.elasticsearch.script.Script(
-                        org.elasticsearch.script.ScriptType.INLINE,
-                        "painless",
-                        String.format("cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, boost),
-                        java.util.Map.of("query_vector", queryVector)
-                    )
-                );
+            // Create the script_score query JSON manually and use wrapper query
+            // The wrapper query expects the full query structure with the query type as the root
+            ObjectNode fullQuery = MAPPER.createObjectNode();
+            ObjectNode scriptScoreJson = MAPPER.createObjectNode();
+            ObjectNode queryJson = MAPPER.createObjectNode();
+            ObjectNode scriptJson = MAPPER.createObjectNode();
+            ObjectNode paramsJson = MAPPER.createObjectNode();
             
-            logger.info("Created script_score query with vector field: {} and boost: {}", vectorField, boost);
-            sourceBuilder.query(scriptScoreQuery);
+            // Build the inner query (match_all)
+            queryJson.set("match_all", MAPPER.createObjectNode());
+            
+            // Build the script
+            scriptJson.put("source", String.format("cosineSimilarity(params.query_vector, '%s') * %f + 1.0", vectorField, boost));
+            
+            // Add the query vector as array
+            com.fasterxml.jackson.databind.node.ArrayNode vectorArray = MAPPER.createArrayNode();
+            for (Float value : queryVector) {
+                vectorArray.add(value);
+            }
+            paramsJson.set("query_vector", vectorArray);
+            scriptJson.set("params", paramsJson);
+            
+            // Assemble the script_score query
+            scriptScoreJson.set("query", queryJson);
+            scriptScoreJson.set("script", scriptJson);
+            
+            // Wrap in the script_score query type
+            fullQuery.set("script_score", scriptScoreJson);
+            
+            String scriptScoreQueryString = MAPPER.writeValueAsString(fullQuery);
+            logger.info("Created script_score query: {}", scriptScoreQueryString);
+            
+            sourceBuilder.query(org.elasticsearch.index.query.QueryBuilders.wrapperQuery(scriptScoreQueryString));
             
             // Add other parameters from the original request
             if (newRequest.has("size")) {
