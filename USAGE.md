@@ -29,6 +29,12 @@ curl -X PUT "localhost:9200/cases" -H 'Content-Type: application/json' -d'
 }'
 ```
 
+{
+    "acknowledged": true,
+    "shards_acknowledged": true,
+    "index": "cases"
+}
+
 ## 2. Create Pipeline
 
 ```bash
