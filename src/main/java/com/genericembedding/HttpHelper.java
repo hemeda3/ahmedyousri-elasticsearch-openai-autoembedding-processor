@@ -118,14 +118,16 @@ public class HttpHelper {
                 
                 logger.info("HTTP connection configuration completed");
 
+                // For OpenAI API, we need to send the input as an array of strings
                 String inputsJson = requests.stream()
                     .map(req -> "\"" + escapeJson(req.getText()) + "\"")
-                    .collect(Collectors.joining(","));
+                    .collect(Collectors.joining(",", "[", "]"));
 
                 String requestBody = requestTemplate
-                    .replace("{{text}}", "[" + inputsJson + "]")
+                    .replace("\"{{text}}\"", inputsJson)  // Replace with proper array, not string
                     .replace("{{model}}", escapeJson(model));
 
+                logger.info("Generated JSON request body: {}", requestBody);
                 logger.info("Sending request body to API (length: {} bytes)", requestBody.length());
                 logger.info("Request headers: {}", headers);
                 logger.info("Connect timeout: {}ms, Read timeout: {}ms", connectTimeoutMillis, readTimeoutMillis);
@@ -147,23 +149,42 @@ public class HttpHelper {
                     logger.info("Successfully received embeddings from API");
                     try (InputStream is = connection.getInputStream()) {
                         JsonNode rootNode = MAPPER.readTree(is);
+                        logger.info("Received response from OpenAI API: {}", rootNode.toString());
                         JsonNode dataNode = findNodeByPath(rootNode, "data");
 
                         if (dataNode != null && dataNode.isArray()) {
                             List<List<Float>> allEmbeddings = new ArrayList<>();
                             for (JsonNode itemNode : (ArrayNode) dataNode) {
-                                JsonNode embeddingNode = findNodeByPath(itemNode, responsePath.substring(responsePath.indexOf(".") + 1));
+                                // For OpenAI API, the embedding is directly in the "embedding" field of each item
+                                JsonNode embeddingNode = itemNode.get("embedding");
                                 if (embeddingNode != null && embeddingNode.isArray()) {
                                     List<Float> embedding = new ArrayList<>();
                                     for (JsonNode node : (ArrayNode) embeddingNode) {
                                         embedding.add(node.floatValue());
                                     }
                                     allEmbeddings.add(embedding);
+                                    logger.info("Successfully parsed embedding with {} dimensions", embedding.size());
                                 } else {
-                                    throw new IOException(PluginConstants.ERROR_INVALID_EMBEDDING_RESPONSE + responsePath + " for item.");
+                                    logger.error("Embedding node not found or not an array in item: {}", itemNode);
+                                    throw new IOException(PluginConstants.ERROR_INVALID_EMBEDDING_RESPONSE + "embedding field not found or invalid for item.");
                                 }
                             }
-                            return new ProviderResponse(allEmbeddings);
+                            
+                            // Extract usage information if available
+                            Map<String, Object> usage = null;
+                            JsonNode usageNode = rootNode.get("usage");
+                            if (usageNode != null) {
+                                usage = new java.util.HashMap<>();
+                                if (usageNode.has("prompt_tokens")) {
+                                    usage.put("prompt_tokens", usageNode.get("prompt_tokens").asInt());
+                                }
+                                if (usageNode.has("total_tokens")) {
+                                    usage.put("total_tokens", usageNode.get("total_tokens").asInt());
+                                }
+                                logger.info("Extracted usage information: {}", usage);
+                            }
+                            
+                            return new ProviderResponse(allEmbeddings, usage);
                         } else {
                             throw new IOException(PluginConstants.ERROR_INVALID_EMBEDDING_RESPONSE + "data array not found or invalid.");
                         }

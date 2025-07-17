@@ -84,6 +84,13 @@ public class AIEmbedProcessor extends AbstractProcessor {
                     logger.info("Successfully set field '{}'", vectorField);
                 }
                 
+                // Store usage information if available
+                if (response.hasUsage()) {
+                    logger.info("=== SETTING USAGE INFORMATION ===");
+                    ingestDocument.setFieldValue("embedding_usage", response.getUsage());
+                    logger.info("Stored usage information: {}", response.getUsage());
+                }
+                
                 logger.info("=== EMBEDDING PROCESSOR COMPLETED SUCCESSFULLY ===");
             } catch (Exception e) {
                 logger.error("=== EMBEDDING PROCESSOR ERROR ===");
